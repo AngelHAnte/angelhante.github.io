@@ -26,8 +26,8 @@ x = d3.scaleTime().range([0, ancho])
 y = d3.scaleLinear().range([alto, 0])
 //Definiendo las categorias a mostrar
 color = d3.scaleOrdinal()
-          .domain(['Muertos', 'Contagiados', 'Vacunados'])
-          .range(['black','red', 'green'])
+          .domain(['Muertos', 'Contagiados', 'Vacunados','Pruebas'])
+          .range(['black','red', 'green', 'purple'])
 
 // Ejes
 xAxisCall = d3.axisBottom().tickFormat(d3.timeFormat("%b' %y"))
@@ -111,14 +111,19 @@ function load(symbol='Muertos', country='Mexico') {
         for(let i = 0; i < data.length; i++) {
           let d = data[i]
           vacc = d.people_fully_vaccinated
+          test = d.total_tests
           if(vacc) {
             value  = vacc
+          }
+          if(test) {
+            ut = test
           }
           let result = {
             date: d.date,
             Contagiados: d.total_cases || 0,
             Muertos: d.total_deaths || 0,
-            Vacunados: d.people_fully_vaccinated || value
+            Vacunados: d.people_fully_vaccinated || value,
+            Pruebas: d.total_tests || ut
           }
           data[i] = result
         }
@@ -139,6 +144,14 @@ function load(symbol='Muertos', country='Mexico') {
           // esto se modificara conforme vayan pasando mas meses para que se siga dividiendo por mes
           xAxisCall.ticks(3)
         }
+
+        if(symbol == 'Pruebas') {
+          // Define la fecha desde la que inicia a contar el numero de vacunados:
+          let startDate = '2020-05-01'
+          let i = 0
+          while(data[i].date < startDate) {
+            data.shift()
+          }}
 
         for(let i = 0; i < data.length; i++) {
           let result = {
