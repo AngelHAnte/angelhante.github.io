@@ -389,12 +389,14 @@
 
         <section id="skills" class="screen">
             <h2 style="color: var(--accent-gold);">Skill Proficiencies</h2>
-            <p>Skills will be displayed here.</p>
+            <p style="color: var(--text-dim); margin-top: 1rem;">Skills system coming soon.</p>
         </section>
+
         <section id="logs" class="screen">
             <h2 style="color: var(--accent-gold);">Activity Log</h2>
             <div id="log-list" style="margin-top: 1rem;"></div>
         </section>
+
         <section id="settings" class="screen">
             <h2 style="color: var(--accent-gold);">Settings</h2>
             <p style="margin-bottom: 1.5rem; color: var(--text-dim);">Manage your data and preferences.</p>
@@ -438,13 +440,36 @@ class App {
         this.init();
     }
 
+    // Create a fully initialized default character
+    createDefaultState() {
+        const attributes = {};
+        Object.keys(CONFIG.ATTRIBUTES).forEach(key => {
+            attributes[key] = { level: 1, xp: 0, totalXp: 0 };
+        });
+
+        return {
+            character: {
+                name: "Novice Adventurer",
+                globalXP: 0,
+                attributes,
+                skills: {}
+            },
+            activities: [],
+            quests: [],
+            settings: { version: "1.2.1" }
+        };
+    }
+
     loadState() {
         const saved = localStorage.getItem('aetheris_data');
         if (saved) {
             try {
                 const parsed = JSON.parse(saved);
                 if (parsed && parsed.character) {
-                    // Ensure attributes are initialized
+                    // Ensure every attribute exists (migration for older saves)
+                    if (!parsed.character.attributes) {
+                        parsed.character.attributes = {};
+                    }
                     Object.keys(CONFIG.ATTRIBUTES).forEach(key => {
                         if (!parsed.character.attributes[key]) {
                             parsed.character.attributes[key] = { level: 1, xp: 0, totalXp: 0 };
@@ -452,18 +477,16 @@ class App {
                     });
                     return parsed;
                 }
-            } catch (e) { console.error("Corrupted data found."); }
+            } catch (e) {
+                console.error("Corrupted data found.", e);
+            }
         }
-        return {
-            character: { name: "Novice Adventurer", globalXP: 0, attributes: {}, skills: {} },
-            activities: [],
-            quests: [],
-            settings: { version: "1.2.0" }
-        };
+        // Fresh user → fully initialized state
+        return this.createDefaultState();
     }
 
     init() {
-        // Seed default goals for fresh accounts
+        // Seed default quests only if the journal is empty
         if (this.state.quests.length === 0) {
             this.state.quests = [
                 { id: 'q1', title: 'German Study', desc: 'Daily language practice', type: 'daily', attrKey: 'INT', xpGain: 30, completed: false, lastCompletedDate: null, history: [] },
@@ -472,20 +495,29 @@ class App {
                 { id: 'q4', title: 'Academic Reading', desc: 'Read non-fiction', type: 'daily', attrKey: 'WIS', xpGain: 20, completed: false, lastCompletedDate: null, history: [] }
             ];
         }
+
         this.save();
         this.render();
     }
 
-    save() { localStorage.setItem('aetheris_data', JSON.stringify(this.state)); }
+    save() {
+        localStorage.setItem('aetheris_data', JSON.stringify(this.state));
+    }
 
     navigate(screenId) {
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
         document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+
         const target = document.getElementById(screenId);
-        if(target) target.classList.add('active');
+        if (target) target.classList.add('active');
+
+        // Better navigation highlighting
         const navItems = document.querySelectorAll('.nav-item');
-        const idx = Array.from(navItems).findIndex(n => n.textContent.toLowerCase().includes(screenId.substring(0,4)));
-        if(idx !== -1) navItems[idx].classList.add('active');
+        navItems.forEach(item => {
+            if (item.textContent.toLowerCase().includes(screenId.substring(0, 4))) {
+                item.classList.add('active');
+            }
+        });
     }
 
     logActivity() {
@@ -495,6 +527,11 @@ class App {
 
         if (!name) { this.notify('Enter an activity name.'); return; }
         if (xpGain <= 0 || xpGain > 1000000) { this.notify('Enter valid XP (1 - 1,000,000).'); return; }
+
+        // Safety: make sure the attribute exists
+        if (!this.state.character.attributes[attrKey]) {
+            this.state.character.attributes[attrKey] = { level: 1, xp: 0, totalXp: 0 };
+        }
 
         const newActivity = {
             id: generateUUID(),
@@ -561,7 +598,9 @@ class App {
                 id: generateUUID(),
                 title: this.escapeHTML(title),
                 desc: this.escapeHTML(desc),
-                type, attrKey, xpGain,
+                type,
+                attrKey,
+                xpGain,
                 completed: false,
                 lastCompletedDate: null,
                 history: []
@@ -599,33 +638,39 @@ class App {
 
     completeQuest(id) {
         const quest = this.state.quests.find(q => q.id === id);
-        if (quest && !quest.completed) {
-            quest.completed = true;
-            quest.lastCompletedDate = new Date().toISOString();
-            quest.history.push({ date: quest.lastCompletedDate, xp: quest.xpGain });
-            
-            this.state.character.globalXP += quest.xpGain;
-            const attr = this.state.character.attributes[quest.attrKey];
-            attr.xp += quest.xpGain;
-            attr.totalXp += quest.xpGain;
+        if (!quest || quest.completed) return;
 
-            while (attr.xp >= CONFIG.XP_FORMULA(attr.level)) {
-                attr.xp -= CONFIG.XP_FORMULA(attr.level);
-                attr.level++;
-            }
-
-            this.save();
-            this.render();
-            this.notify(`Quest Complete: ${quest.title}!`);
-            
-            this.state.activities.unshift({
-                id: generateUUID(),
-                name: `Quest: ${quest.title}`,
-                attrKey: quest.attrKey,
-                xpGain: quest.xpGain,
-                timestamp: new Date().toISOString()
-            });
+        // Safety
+        if (!this.state.character.attributes[quest.attrKey]) {
+            this.state.character.attributes[quest.attrKey] = { level: 1, xp: 0, totalXp: 0 };
         }
+
+        quest.completed = true;
+        quest.lastCompletedDate = new Date().toISOString();
+        quest.history.push({ date: quest.lastCompletedDate, xp: quest.xpGain });
+
+        this.state.character.globalXP += quest.xpGain;
+        const attr = this.state.character.attributes[quest.attrKey];
+        attr.xp += quest.xpGain;
+        attr.totalXp += quest.xpGain;
+
+        while (attr.xp >= CONFIG.XP_FORMULA(attr.level)) {
+            attr.xp -= CONFIG.XP_FORMULA(attr.level);
+            attr.level++;
+        }
+
+        // Also log it as an activity
+        this.state.activities.unshift({
+            id: generateUUID(),
+            name: `Quest: ${quest.title}`,
+            attrKey: quest.attrKey,
+            xpGain: quest.xpGain,
+            timestamp: new Date().toISOString()
+        });
+
+        this.save();
+        this.render();
+        this.notify(`Quest Complete: ${quest.title}!`);
     }
 
     handleQuestRecurrence() {
@@ -653,15 +698,16 @@ class App {
 
         if (changed) {
             this.save();
-            this.render();
         }
     }
 
     render() {
         this.handleQuestRecurrence();
+
         const char = this.state.character;
         const totalXP = char.globalXP || 0;
 
+        // Calculate global level
         let globalLevel = 1;
         let remainingXP = totalXP;
         let nextGlobalXP = CONFIG.XP_FORMULA(globalLevel);
@@ -676,13 +722,15 @@ class App {
         document.getElementById('display-total-xp').textContent = totalXP;
         document.getElementById('display-next-level-xp').textContent = nextGlobalXP;
         document.getElementById('global-progress-bar').style.width = `${Math.min(100, (remainingXP / nextGlobalXP) * 100)}%`;
-        document.getElementById('display-rank').textContent = globalLevel > 10 ? 'Veteran' : globalLevel > 5 ? 'Adept' : 'Novice';
+        document.getElementById('display-rank').textContent =
+            globalLevel > 10 ? 'Veteran' : globalLevel > 5 ? 'Adept' : 'Novice';
 
+        // Attributes
         const attrContainer = document.getElementById('attributes-container');
-        if(attrContainer) {
+        if (attrContainer) {
             attrContainer.innerHTML = "";
             Object.keys(CONFIG.ATTRIBUTES).forEach(key => {
-                const data = char.attributes[key];
+                const data = char.attributes[key] || { level: 1, xp: 0, totalXp: 0 };
                 const config = CONFIG.ATTRIBUTES[key];
                 const req = CONFIG.XP_FORMULA(data.level);
                 const progress = Math.min(100, (data.xp / req) * 100);
@@ -690,54 +738,69 @@ class App {
                 const card = document.createElement('div');
                 card.className = 'attr-card';
                 card.innerHTML = `
-                    <h3 style="font-size: 0.9rem;">${key} ${data.level} <span style="color: var(--text-dim); font-weight: normal;">${config.name}</span></h3>
+                    <h3 style="font-size: 0.9rem;">
+                        ${key} ${data.level}
+                        <span style="color: var(--text-dim); font-weight: normal;">${config.name}</span>
+                    </h3>
                     <div class="attr-desc">${config.desc}</div>
-                    <div class="progress-container"><div class="progress-fill" style="width: ${progress}%"></div></div>
+                    <div class="progress-container">
+                        <div class="progress-fill" style="width: ${progress}%"></div>
+                    </div>
                     <small style="color: var(--text-dim);">${data.xp} / ${req} XP</small>
                 `;
                 attrContainer.appendChild(card);
             });
         }
 
+        // Quests
         const questList = document.getElementById('quest-list');
         if (questList) {
-            questList.innerHTML = this.state.quests.length ? this.state.quests.map(q => `
-                <div class="quest-card ${q.completed ? 'completed' : ''}">
-                    <div style="font-size: 0.7rem; color: var(--accent-blue); text-transform: uppercase; margin-bottom: 0.2rem;">${q.type}</div>
-                    <h3 style="font-size: 1rem;">${q.title}</h3>
-                    <p>${q.desc}</p>
-                    <div class="meta">
-                        <span>Reward: ${q.xpGain} ${q.attrKey} XP</span>
+            questList.innerHTML = this.state.quests.length
+                ? this.state.quests.map(q => `
+                    <div class="quest-card ${q.completed ? 'completed' : ''}">
+                        <div style="font-size: 0.7rem; color: var(--accent-blue); text-transform: uppercase; margin-bottom: 0.2rem;">
+                            ${q.type}
+                        </div>
+                        <h3 style="font-size: 1rem;">${q.title}</h3>
+                        <p>${q.desc}</p>
+                        <div class="meta">
+                            <span>Reward: ${q.xpGain} ${q.attrKey} XP</span>
+                        </div>
+                        <div class="quest-actions">
+                            ${!q.completed
+                                ? `<button onclick="window.app.completeQuest('${q.id}')">Complete</button>`
+                                : `<span style="color: var(--success); font-size: 0.75rem;">✓ Finished</span>`
+                            }
+                            <button onclick="window.app.editQuest('${q.id}')" style="background: #444; color: white;">Edit</button>
+                            <button onclick="window.app.deleteQuest('${q.id}')" style="background: var(--danger); color: white;">Delete</button>
+                        </div>
                     </div>
-                    <div class="quest-actions">
-                        ${!q.completed ? `
-                            <button onclick="window.app.completeQuest('${q.id}')">Complete</button>
-                        ` : `
-                            <span style="color: var(--success); font-size: 0.75rem;">✓ Finished</span>
-                        `}
-                        <button onclick="window.app.editQuest('${q.id}')" style="background: #444; color: white;">Edit</button>
-                        <button onclick="window.app.deleteQuest('${q.id}')" style="background: var(--danger); color: white;">Delete</button>
-                    </div>
-                </div>
-            `).join('') : '<p style="grid-column: 1/-1; text-align: center; color: var(--text-dim);">No quests in your journal.</p>';
+                `).join('')
+                : '<p style="grid-column: 1/-1; text-align: center; color: var(--text-dim);">No quests in your journal.</p>';
         }
 
+        // Activity Log
         const logList = document.getElementById('log-list');
         if (logList) {
-            logList.innerHTML = this.state.activities.length ? this.state.activities.map(a => `
-                <div style="border-bottom: 1px solid #222; padding: 10px 0;">
-                    <strong style="font-size: 0.9rem;">${this.escapeHTML(a.name)}</strong> <span style="color: var(--accent-gold)">+${a.xpGain} ${a.attrKey} XP</span>
-                    <div style="font-size: 0.7rem; color: var(--text-dim);">${new Date(a.timestamp).toLocaleString()}</div>
-                </div>
-            `).join('') : '<p style="color:var(--text-dim);">No activities logged yet.</p>';
+            logList.innerHTML = this.state.activities.length
+                ? this.state.activities.map(a => `
+                    <div style="border-bottom: 1px solid #222; padding: 10px 0;">
+                        <strong style="font-size: 0.9rem;">${this.escapeHTML(a.name)}</strong>
+                        <span style="color: var(--accent-gold)">+${a.xpGain} ${a.attrKey} XP</span>
+                        <div style="font-size: 0.7rem; color: var(--text-dim);">
+                            ${new Date(a.timestamp).toLocaleString()}
+                        </div>
+                    </div>
+                `).join('')
+                : '<p style="color:var(--text-dim);">No activities logged yet.</p>';
         }
     }
 
-    escapeHTML(v) { 
-        if(!v) return "";
+    escapeHTML(v) {
+        if (!v) return "";
         return String(v).replace(/[&<>"']/g, c => ({
             '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-        })[c]); 
+        })[c]);
     }
 
     notify(msg) {
@@ -750,12 +813,13 @@ class App {
     }
 
     exportData() {
-        const blob = new Blob([JSON.stringify(this.state)], {type: 'application/json'});
+        const blob = new Blob([JSON.stringify(this.state, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = 'aetheris_backup.json';
         a.click();
+        URL.revokeObjectURL(url);
     }
 
     importData() {
@@ -764,11 +828,22 @@ class App {
         input.accept = '.json';
         input.onchange = e => {
             const file = e.target.files[0];
+            if (!file) return;
+
             const reader = new FileReader();
             reader.onload = event => {
                 try {
                     const imported = JSON.parse(event.target.result);
-                    if (imported.character && imported.quests) {
+                    if (imported.character && Array.isArray(imported.quests)) {
+                        // Re-ensure attributes exist after import
+                        if (!imported.character.attributes) {
+                            imported.character.attributes = {};
+                        }
+                        Object.keys(CONFIG.ATTRIBUTES).forEach(key => {
+                            if (!imported.character.attributes[key]) {
+                                imported.character.attributes[key] = { level: 1, xp: 0, totalXp: 0 };
+                            }
+                        });
                         this.state = imported;
                         this.save();
                         this.render();
@@ -776,8 +851,9 @@ class App {
                     } else {
                         throw new Error("Invalid structure");
                     }
-                } catch (e) {
+                } catch (err) {
                     this.notify("Error importing data. Invalid JSON format.");
+                    console.error(err);
                 }
             };
             reader.readAsText(file);
@@ -786,7 +862,7 @@ class App {
     }
 
     resetData() {
-        if(confirm("WARNING: This will delete all progress, attributes, and quests. Proceed?")) {
+        if (confirm("WARNING: This will delete all progress, attributes, and quests. Proceed?")) {
             localStorage.removeItem('aetheris_data');
             location.reload();
         }
